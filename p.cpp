@@ -1,211 +1,236 @@
+#include <iostream>
+#include <string>
 #include <vector>
 #include <memory>
-#include <iostream>
-#include <cassert>
 #include <functional>
+#include <stdexcept>
 
-class Term {
-public:
-    virtual ~Term() = default;
-    virtual std::string toString() const = 0;
-    virtual std::shared_ptr<Term> reduce() const = 0;
-    virtual std::shared_ptr<Term> substitute(const std::shared_ptr<Term>& arg, const std::string& varName) const = 0;
-};
+// Тип данных для лямбда-выражений
+struct Term;
 
 using TermPtr = std::shared_ptr<Term>;
+using TermList = std::vector<TermPtr>;
+using ImplFunc = std::function<TermPtr(TermList)>;
 
-class Var : public Term {
-    std::string name;
-public:
-    Var(const std::string& v) : name(v) {}
-    std::string toString() const override { return name; }
-    TermPtr reduce() const override {
-        return std::make_shared<Var>(*this);
-    }
-    TermPtr substitute(const TermPtr& arg, const std::string& varName) const override {
-        if (name == varName) return arg;
-        return std::make_shared<Var>(*this);
-    }
-};
-
-class Atom : public Term {
-    std::string name;
-    std::function<TermPtr(std::vector<TermPtr>)> reducer;
-public:
+struct Term {
+    enum class Type { VAR, ATOM, APP, LAMBDA };
+    
+    Type type;
+    
+    // Для VAR
+    std::string var_name;
+    
+    // Для ATOM
+    std::string atom_name;
     int arity;
-    Atom(const std::string& n, int a, std::function<TermPtr(std::vector<TermPtr>)> r) 
-        : name(n), arity(a), reducer(r) {}
+    ImplFunc impl;
     
-    std::string toString() const override { 
-        return name; 
+    // Для APP
+    TermList app_terms;
+    
+    // Для LAMBDA
+    std::string bound_var;
+    TermPtr body_term;
+    
+    // Конструкторы
+    static TermPtr Var(const std::string& name) {
+        auto term = std::make_shared<Term>();
+        term->type = Type::VAR;
+        term->var_name = name;
+        return term;
     }
     
-    TermPtr reduce() const override { 
-        return std::make_shared<Atom>(*this); 
+    static TermPtr Atom(const std::string& name, int arity, ImplFunc impl) {
+        auto term = std::make_shared<Term>();
+        term->type = Type::ATOM;
+        term->atom_name = name;
+        term->arity = arity;
+        term->impl = impl;
+        return term;
     }
     
-    TermPtr apply(const std::vector<TermPtr>& args) const {
-        if (args.size() != arity) {
-            throw std::runtime_error("Arity mismatch for atom " + name);
-        }
-        return reducer(args);
+    static TermPtr App(const TermList& terms) {
+        auto term = std::make_shared<Term>();
+        term->type = Type::APP;
+        term->app_terms = terms;
+        return term;
     }
     
-    TermPtr substitute(const TermPtr& arg, const std::string& varName) const override {
-        return std::make_shared<Atom>(*this);
+    static TermPtr Lambda(const std::string& bound_var, TermPtr body_term) {
+        auto term = std::make_shared<Term>();
+        term->type = Type::LAMBDA;
+        term->bound_var = bound_var;
+        term->body_term = body_term;
+        return term;
     }
 };
 
-class Lambda : public Term {
-    std::string param;
-    TermPtr body;
-public:
-    Lambda(const std::string& p, TermPtr b) : param(p), body(b) {}
-    std::string toString() const override {
-        return "λ" + param + ". " + body->toString();
-    }
-    TermPtr reduce() const override {
-        auto reduced_body = body->reduce();
-        return std::make_shared<Lambda>(param, reduced_body);
-    }
-    TermPtr apply(const TermPtr& arg) const {
-        return body->substitute(arg, param);
-    }
-    TermPtr substitute(const TermPtr& arg, const std::string& varName) const override {
-        if (param == varName) return std::make_shared<Lambda>(*this);
-        return std::make_shared<Lambda>(param, body->substitute(arg, varName));
-    }
-};
-
-class App : public Term {
-    std::vector<TermPtr> terms;
-public:
-    App(const std::vector<TermPtr>& t) : terms(t) {}
-
-    std::string toString() const override {
-        if (terms.empty()) return "()";
-        
-        std::string result = terms[0]->toString();
-        for (size_t i = 1; i < terms.size(); i++) {
-            // Для правой ассоциативности: f x y z = (f x) (y z) НЕТ!
-            // Правильно: f x y z = ((f x) y) z - левая ассоциативность
-            // Но если у нас правая, то нужно показывать как f (x (y z))
-            if (i < terms.size() - 1) {
-                result = "(" + result + " " + terms[i]->toString() + ")";
-            } else {
-                result = result + " " + terms[i]->toString();
+// Функция подстановки
+TermPtr substitute(TermPtr arg, const std::string& n, TermPtr body) {
+    switch (body->type) {
+        case Term::Type::VAR:
+            if (body->var_name == n) {
+                return arg;
             }
-        }
-        return result;
-    }
-
-    TermPtr reduce() const override {
-        if (terms.empty()) {
-            return std::make_shared<App>(terms);
-        }
-        
-        // Редуцируем голову (функцию)
-        auto reduced_head = terms[0]->reduce();
-        
-        // Если голова - лямбда и есть хотя бы один аргумент
-        if (auto lambda = std::dynamic_pointer_cast<Lambda>(reduced_head)) {
-            if (terms.size() >= 2) {
-                // Бета-редукция: применяем лямбду к первому аргументу
-                TermPtr new_head = lambda->apply(terms[1]);
-                
-                // Создаем новое применение с оставшимися аргументами
-                std::vector<TermPtr> new_terms = {new_head};
-                for (size_t i = 2; i < terms.size(); i++) {
-                    new_terms.push_back(terms[i]);
-                }
-                
-                return std::make_shared<App>(new_terms)->reduce();
+            return body;
+            
+        case Term::Type::APP: {
+            TermList new_terms;
+            for (const auto& term : body->app_terms) {
+                new_terms.push_back(substitute(arg, n, term));
             }
+            return Term::App(new_terms);
         }
-        
-        // Если голова - атом с достаточной арностью
-        if (auto atom = std::dynamic_pointer_cast<Atom>(reduced_head)) {
-            if (terms.size() - 1 >= atom->arity) {
-                std::vector<TermPtr> args(terms.begin() + 1, terms.end());
-                return atom->apply(args);
+            
+        case Term::Type::LAMBDA:
+            if (body->bound_var == n) {
+                return body;
             }
-        }
-        
-        // Если ничего не применилось, но голова редуцировалась
-        if (reduced_head != terms[0]) {
-            std::vector<TermPtr> new_terms = {reduced_head};
-            for (size_t i = 1; i < terms.size(); i++) {
-                new_terms.push_back(terms[i]);
-            }
-            return std::make_shared<App>(new_terms);
-        }
-        
-        // Пытаемся редуцировать аргументы (нормальный порядок)
-        for (size_t i = 1; i < terms.size(); i++) {
-            auto reduced_arg = terms[i]->reduce();
-            if (reduced_arg != terms[i]) {
-                std::vector<TermPtr> new_terms = terms;
-                new_terms[i] = reduced_arg;
-                return std::make_shared<App>(new_terms)->reduce();
-            }
-        }
-        
-        return std::make_shared<App>(terms);
+            return Term::Lambda(body->bound_var, substitute(arg, n, body->body_term));
+            
+        case Term::Type::ATOM:
+            return body;
     }
-
-    TermPtr substitute(const TermPtr& arg, const std::string& varName) const override {
-        std::vector<TermPtr> new_terms;
-        for (const auto& term : terms) {
-            new_terms.push_back(term->substitute(arg, varName));
-        }
-        return std::make_shared<App>(new_terms);
-    }
-};
-
-TermPtr var(const std::string& name) { return std::make_shared<Var>(name); }
-TermPtr lambda(const std::string& p, TermPtr b) { return std::make_shared<Lambda>(p, b); }
-TermPtr app(const std::vector<TermPtr>& t) { return std::make_shared<App>(t); }
-
-// Вспомогательная функция для создания аппликаций с правой ассоциативностью
-TermPtr app_right(const std::vector<TermPtr>& terms) {
-    if (terms.empty()) return app({});
-    if (terms.size() == 1) return terms[0];
-    
-    // Правая ассоциативность: a b c d = (a (b (c d)))
-    TermPtr result = terms.back();
-    for (int i = terms.size() - 2; i >= 0; i--) {
-        result = app({terms[i], result});
-    }
-    return result;
+    return body;
 }
 
-// Тесты для правой ассоциативности
+// Преобразование термина в строку
+std::string term_to_string(TermPtr t) {
+    switch (t->type) {
+        case Term::Type::VAR:
+            return t->var_name;
+            
+        case Term::Type::ATOM:
+            return t->atom_name;
+            
+        case Term::Type::LAMBDA:
+            return "(L" + t->bound_var + "." + term_to_string(t->body_term) + ")";
+            
+        case Term::Type::APP: {
+            std::string result = "(";
+            for (size_t i = 0; i < t->app_terms.size(); ++i) {
+                result += term_to_string(t->app_terms[i]);
+                if (i < t->app_terms.size() - 1) {
+                    result += " ";
+                }
+            }
+            result += ")";
+            return result;
+        }
+    }
+    return "";
+}
+
+// Функция редукции
+TermPtr reduce(TermPtr t) {
+    switch (t->type) {
+        case Term::Type::VAR:
+            return t;
+            
+        case Term::Type::ATOM:
+            return t;
+            
+        case Term::Type::APP:
+            if (!t->app_terms.empty()) {
+                auto first = reduce(t->app_terms[0]);
+                
+                // Обработка ATOM
+                if (first->type == Term::Type::ATOM) {
+                    if (t->app_terms.size() - 1 >= first->arity) {
+                        TermList args;
+                        for (size_t i = 1; i < t->app_terms.size(); ++i) {
+                            args.push_back(reduce(t->app_terms[i]));
+                        }
+                        return first->impl(args);
+                    } else {
+                        TermList new_terms = {first};
+                        for (size_t i = 1; i < t->app_terms.size(); ++i) {
+                            new_terms.push_back(reduce(t->app_terms[i]));
+                        }
+                        return Term::App(new_terms);
+                    }
+                }
+                // Обработка LAMBDA
+                else if (first->type == Term::Type::LAMBDA) {
+                    if (t->app_terms.size() >= 2) {
+                        auto arg = reduce(t->app_terms[1]);
+                        TermList tail;
+                        for (size_t i = 2; i < t->app_terms.size(); ++i) {
+                            tail.push_back(reduce(t->app_terms[i]));
+                        }
+                        auto new_body = substitute(arg, first->bound_var, first->body_term);
+                        if (tail.empty()) {
+                            return reduce(new_body);
+                        } else {
+                            tail.insert(tail.begin(), new_body);
+                            return reduce(Term::App(tail));
+                        }
+                    } else {
+                        return Term::Lambda(first->bound_var, reduce(first->body_term));
+                    }
+                }
+                // Рекурсивная обработка головы
+                else {
+                    TermList new_terms = {first};
+                    for (size_t i = 1; i < t->app_terms.size(); ++i) {
+                        new_terms.push_back(reduce(t->app_terms[i]));
+                    }
+                    return Term::App(new_terms);
+                }
+            }
+            return t;
+            
+        case Term::Type::LAMBDA:
+            return Term::Lambda(t->bound_var, reduce(t->body_term));
+    }
+    return t;
+}
+
+// Комбинаторы
+TermPtr cK = Term::Atom("K", 2, [](TermList args) {
+    if (args.size() >= 2) {
+        return args[0];
+    }
+    throw std::runtime_error("K: wrong number of arguments");
+});
+
+TermPtr cS = Term::Atom("S", 3, [](TermList args) {
+    if (args.size() >= 3) {
+        TermList new_args = {
+            args[0],
+            args[2],
+            Term::App({args[1], args[2]})
+        };
+        // Добавляем оставшиеся аргументы
+        for (size_t i = 3; i < args.size(); ++i) {
+            new_args.push_back(args[i]);
+        }
+        return Term::App(new_args);
+    }
+    throw std::runtime_error("S: wrong number of arguments");
+});
+
 int main() {
-    // Тест 1: (λx. λy. x) b a → a (правая ассоциативность)
-    auto test1 = app_right({
-        lambda("x", lambda("y", var("x"))),
-        var("b"),
-        var("a")
-    });
-    std::cout << "Тест 1 (правая ассоциативность): " << test1->toString() << " → " << test1->reduce()->toString() << std::endl;
-    
-    // Тест 2: (λx. x) (λy. y) a → a
-    auto test2 = app_right({
-        lambda("x", var("x")),
-        lambda("y", var("y")),
-        var("a")
-    });
-    std::cout << "Тест 2: " << test2->toString() << " → " << test2->reduce()->toString() << std::endl;
-    
-    // Тест 3: Ваш пример - (λx. λy. x) b a
-    auto test3 = app({
-        app({
-            lambda("x", lambda("y", var("x"))),
-            var("b")
-        }),
-        var("a")
-    });
-    std::cout << "Тест 3 (ваш пример): " << test3->toString() << " → " << test3->reduce()->toString() << std::endl;
+    // Тестирование
+    try {
+        // y = reduce(App[cS; cK; cK; Var "x"])
+        auto y = reduce(Term::App({cS, cK, cK, Term::Var("x")}));
+        std::string r = term_to_string(y);
+        std::cout << "y = " << r << std::endl;
+        
+        // os1 = App[Lambda("x", Lambda("y", App[Var "x"; Var "y"; Var "z"])); (App[cK; Var "z"]) ]
+        auto os1 = Term::App({
+            Term::Lambda("x", Term::Lambda("y", Term::App({Term::Var("x"), Term::Var("y"), Term::Var("z")}))),
+            Term::App({cK, Term::Var("z")})
+        });
+        
+        auto o1 = reduce(os1);
+        auto o3 = term_to_string(o1);
+        std::cout << "o1 = " << o3 << std::endl;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+    }
     
     return 0;
 }
