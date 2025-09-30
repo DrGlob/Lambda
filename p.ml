@@ -1,69 +1,84 @@
-(* Тип данных для лямбда-выражений *) 
+(* This is an OCaml editor.
+Enter your program here and send it to the toplevel using the "Eval code"
+button or [Ctrl-e]. *)
+
+(* Тип данных для лямбда-выражений *)
 type term = 
   | Var of string
   | Atom of string * int * (term list -> term)
   | App of term list
   | Lambda of string * term
 
-(* Функция подстановки - исправленная версия *)
+              
 let rec substitute arg n body =
   match body with
   | Var m when m = n -> arg
-  | Var m -> Var m
+  | Var m -> Var m 
   | App terms -> App (List.map (substitute arg n) terms)
   | Lambda (bound_var, body_term) -> 
       if bound_var = n then Lambda (bound_var, body_term)
       else Lambda (bound_var, substitute arg n body_term)
-  | Atom (name, arity, impl) -> body
-
-(* Функция редукции - упрощенная, без атомов *)
-let rec reduce t =
+  | Atom (name, arity, impl) -> body 
+    
+    
+let list_to_string = fun t -> "("^String.concat " " t ^")"
+    
+let rec term_to_string = fun t ->
   match t with
-  | Var n -> Var n
-  | Atom (name, arity, impl) -> Atom (name, arity, impl)
-  | App ((Lambda (n, body)) :: arg :: tail) ->
-      let reduced_arg = reduce arg in
-      reduce (App (substitute reduced_arg n body :: tail))
-  | App terms ->
-      let reduced_terms = List.map reduce terms in
-      if reduced_terms <> terms then
-        reduce (App reduced_terms)
-      else
-        App reduced_terms 
+  | Var n -> n
+  | Atom (n,arity,f) -> n
+  | Lambda (bound_var, body_term) ->
+      "(L"^bound_var^"."^term_to_string(body_term)^")"
+      
+  | App terms -> list_to_string(List.map term_to_string terms)
+                   
+                   
 
-(* Вспомогательная функция для красивого вывода *)
-let rec term_to_string = function
-  | Var s -> s
-  | Atom (s, _, _) -> s
-  | App terms -> "(" ^ String.concat " " (List.map term_to_string terms) ^ ")"
-  | Lambda (param, body) -> "(λ" ^ param ^ "." ^ term_to_string body ^ ")"
 
-(* ТЕСТ 1: Простая идентичная функция *)
-let test1 = App [Lambda ("x", Var "x"); Var "a"]
-
-(* ТЕСТ 2: Константная функция (K-комбинатор) - упрощенная *)
-let test2 = App [Lambda ("x", Var "x"); Var "a"]
-
-(* ТЕСТ 3: Многошаговая редукция *)
-let test3 = App [
-    Lambda ("x", App [Lambda ("y", Var "x"); Var "b"]);
-    Var "a"
-  ]
-
-let run_test name expr =
-  print_endline ("\n" ^ name ^ ":");
-  print_endline ("Исходное: " ^ term_to_string expr);
-  try
-    let result = reduce expr in
-    print_endline ("Результат: " ^ term_to_string result)
-  with exn ->
-    print_endline ("ОШИБКА: " ^ Printexc.to_string exn);
-    print_endline ("Место ошибки: " ^ Printexc.get_backtrace ())
-
-(* Запускаем все тесты *)
-let () =
-  print_endline "=== ТЕСТИРОВАНИЕ ИНТЕРПРЕТАТОРА ===";
+          
   
-  run_test "ТЕСТ 1: Идентичная функция" test1;
-  run_test "ТЕСТ 2: Упрощенный K-комбинатор" test2;
-  run_test "ТЕСТ 3: Многошаговая редукция" test3
+let rec reduce = fun t ->
+  match t with 
+  | Var n -> Var n
+  | Atom (n,arity,f) -> Atom (n,arity,f)
+  | App ((Atom (n,arity,f)) :: tail) ->
+      if List.length tail >= arity then
+        reduce (f tail)
+      else
+        App ((Atom (n,arity,f)) :: tail) 
+  | App ((Lambda (n, body)) :: arg :: tail ) ->
+      reduce (App ((substitute arg n body) :: tail))
+  | App ((Lambda (n, body)) :: [] ) -> 
+      Lambda (n, reduce(body))
+  | Lambda (n, body) ->
+      Lambda (n, reduce (body)) 
+  | App(h::tail) ->
+      App(reduce(h)::tail)
+  |_ -> failwith (term_to_string(t))
+
+          
+
+let cK = Atom ("K", 2, fun args ->
+    match args with
+    | x :: y :: [] -> x
+    | _ -> failwith "K: wrong number of arguments")
+    
+    
+let cS = Atom ("S", 3, fun args ->
+    match args with
+    | x :: y :: z :: tail -> App (x :: z :: (App [y;z]) :: tail)
+    | _ -> failwith "error")
+
+               
+let y = reduce(App[cS; cK; cK;  Var "x"]) ;; 
+let r = term_to_string(y)
+
+
+let os1 = App[Lambda("x", Lambda("y", App[Var "x"; Var "y"; Var "z"])); (App[cK; Var "z"]) ] 
+    
+let o1 = reduce(os1)
+    
+let o3 = term_to_string(o1)
+    
+    
+    (*let o2 = reduce (o1)*)
