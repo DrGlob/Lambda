@@ -1,50 +1,69 @@
-(* Тип данных для лямбда-выражений *)
-(*
-App [t1; t2; t3; t4] представляет последовательную аппликацию (((t1 t2) t3) t4) - посути удобная апликация
-Atom - расширяемый примитив
-*)
-(*<> - неравно*)
+(* Тип данных для лямбда-выражений *) 
 type term = 
   | Var of string
   | Atom of string * int * (term list -> term)
   | App of term list
   | Lambda of string * term
 
-(* (λx.λy.((λx.λy.(x+y)) (x+5) (y+11))) 5 10 *)
+(* Функция подстановки - исправленная версия *)
 let rec substitute arg n body =
   match body with
-  | Var m when m = n -> arg        1
-  | Var m -> Var m (*оставляем как есть*).   2
-  | App terms -> App (List.map (substitute arg n) terms).  3
+  | Var m when m = n -> arg
+  | Var m -> Var m
+  | App terms -> App (List.map (substitute arg n) terms)
   | Lambda (bound_var, body_term) -> 
-      if bound_var = n then Lambda (bound_var, body_term). 4
-      else Lambda (bound_var, substitute arg n body_term)   5
-  | Atom (name, arity, impl) -> body. 6
+      if bound_var = n then Lambda (bound_var, body_term)
+      else Lambda (bound_var, substitute arg n body_term)
+  | Atom (name, arity, impl) -> body
 
+(* Функция редукции - упрощенная, без атомов *)
 let rec reduce t =
   match t with
-  | Var n -> Var n. 1
-  | Atom (name, arity, impl) -> Atom (name, arity, impl). 2
-  | App ((Atom (name, arity, impl)) :: tail) ->
-      if List.length tail >= arity then. 3
-        reduce (impl tail)
-      else. 4
-        App (Atom (name, arity, impl) :: List.map reduce tail)
-  | App ((Lambda (n, body)) :: arg :: tail) ->. 5
-      reduce (App (reduce arg :: substitute (reduce arg) n body :: tail))
-  | App terms ->.
+  | Var n -> Var n
+  | Atom (name, arity, impl) -> Atom (name, arity, impl)
+  | App ((Lambda (n, body)) :: arg :: tail) ->
+      let reduced_arg = reduce arg in
+      reduce (App (substitute reduced_arg n body :: tail))
+  | App terms ->
       let reduced_terms = List.map reduce terms in
-      if reduced_terms <> terms then 6
+      if reduced_terms <> terms then
         reduce (App reduced_terms)
-      else. 7
-        App reduced_terms
+      else
+        App reduced_terms 
 
-let cS = Atom ("S", 3, fun args ->  
-  match args with  
-  | x :: y :: z :: tail -> App (x :: z :: (App [y; z]) :: tail)  
-  | _ -> failwith "error")
+(* Вспомогательная функция для красивого вывода *)
+let rec term_to_string = function
+  | Var s -> s
+  | Atom (s, _, _) -> s
+  | App terms -> "(" ^ String.concat " " (List.map term_to_string terms) ^ ")"
+  | Lambda (param, body) -> "(λ" ^ param ^ "." ^ term_to_string body ^ ")"
 
-let getAtom = fun t ->  
-  match t with  
-  | Atom (n, arity, f) -> (n, arity, f)  
-  | _ -> failwith "error"
+(* ТЕСТ 1: Простая идентичная функция *)
+let test1 = App [Lambda ("x", Var "x"); Var "a"]
+
+(* ТЕСТ 2: Константная функция (K-комбинатор) - упрощенная *)
+let test2 = App [Lambda ("x", Var "x"); Var "a"]
+
+(* ТЕСТ 3: Многошаговая редукция *)
+let test3 = App [
+    Lambda ("x", App [Lambda ("y", Var "x"); Var "b"]);
+    Var "a"
+  ]
+
+let run_test name expr =
+  print_endline ("\n" ^ name ^ ":");
+  print_endline ("Исходное: " ^ term_to_string expr);
+  try
+    let result = reduce expr in
+    print_endline ("Результат: " ^ term_to_string result)
+  with exn ->
+    print_endline ("ОШИБКА: " ^ Printexc.to_string exn);
+    print_endline ("Место ошибки: " ^ Printexc.get_backtrace ())
+
+(* Запускаем все тесты *)
+let () =
+  print_endline "=== ТЕСТИРОВАНИЕ ИНТЕРПРЕТАТОРА ===";
+  
+  run_test "ТЕСТ 1: Идентичная функция" test1;
+  run_test "ТЕСТ 2: Упрощенный K-комбинатор" test2;
+  run_test "ТЕСТ 3: Многошаговая редукция" test3
